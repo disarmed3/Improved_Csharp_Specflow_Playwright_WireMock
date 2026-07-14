@@ -1,0 +1,28 @@
+<!DOCTYPE html><html lang="en"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sandbox - CodeSandbox</title><link id="external-css" rel="stylesheet" type="text/css" href="https://cdnjs.cloudflare.com/ajax/libs/twitter-bootstrap/4.5.0/css/bootstrap.css" media="all"></head><body><div id="root"><div><div class="App-payment"><h1>React Credit Cards</h1><h4>Beautiful credit cards for your payment forms</h4><form><div class="form-group"><input type="tel" name="number" class="form-control" placeholder="Card Number" pattern="[\d| ]{16,22}" required=""><small>E.g.: 49..., 51..., 36..., 37...</small></div><div class="form-group"><input type="text" name="name" class="form-control" placeholder="Name" required=""></div><div class="row"><div class="col-6"><input type="tel" name="expiry" class="form-control" placeholder="Valid Thru" pattern="\d\d/\d\d" required=""></div><div class="col-6"><input type="tel" name="cvc" class="form-control" placeholder="CVC" pattern="\d{3,4}" required=""></div></div><div class="form-actions"><button class="btn btn-primary btn-block">PAY</button></div></form><div id="payment-result" style="display:none; margin-top:15px; padding:10px; border-radius:5px; background:#eafaf1; color:#1a7a3c;"></div></div></div>
+<script>
+document.querySelector("form").addEventListener("submit", async function (e) {
+  e.preventDefault();
+  var formData = new FormData(this);
+  var payload = {
+    name: formData.get("name"),
+    cardNumber: formData.get("number"),
+    expiryDate: formData.get("expiry"),
+    cvc: formData.get("cvc")
+  };
+  var resultEl = document.getElementById("payment-result");
+  try {
+    var resp = await fetch("http://localhost:3030/payment", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    var text = await resp.text();
+    resultEl.textContent = text;
+    resultEl.style.display = "block";
+  } catch (err) {
+    resultEl.textContent = "Payment failed: " + err.message;
+    resultEl.style.display = "block";
+  }
+});
+</script>
+</body></html>
