@@ -4,18 +4,18 @@ using WireMock.Server;
 using WireMock.Settings;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
-using System.Text;
+using System.Net;
+using System.IO;
 using NUnit.Framework;
 
 [Binding]
 public class CreditCardSteps : PageTest
 {
-    private readonly HttpClient _client = new HttpClient();
-    private HttpResponseMessage _response;
     private WireMockServer _server;
     private IPlaywright _playwright;
     private IBrowser _browser;
     private IPage _page;
+    private HttpListener _pageServer;
 
     private record PaymentRequest
     {
@@ -44,21 +44,60 @@ public class CreditCardSteps : PageTest
         });
         _page = await _browser.NewPageAsync();
 
-        // Initialize WireMock server
+        // Initialize WireMock server (CORS-enabled stub + POST)
         _server = WireMockServer.Start(new WireMockServerSettings { Port = 3030 });
+
+        _server
+            .Given(Request.Create().WithPath("/payment").UsingOptions())
+            .RespondWith(Response.Create()
+                .WithStatusCode(200)
+                .WithHeader("Access-Control-Allow-Origin", "*")
+                .WithHeader("Access-Control-Allow-Methods", "POST, OPTIONS")
+                .WithHeader("Access-Control-Allow-Headers", "Content-Type")
+            );
+
         _server
             .Given(Request.Create().WithPath("/payment").UsingPost())
             .RespondWith(Response.Create()
                 .WithStatusCode(201)
+                .WithHeader("Access-Control-Allow-Origin", "*")
                 .WithBody("Successful transaction")
             );
+
+        // Start local static page server
+        StartPageServer();
+    }
+
+    private void StartPageServer()
+    {
+        _pageServer = new HttpListener();
+        _pageServer.Prefixes.Add("http://localhost:5050/");
+        _pageServer.Start();
+        _ = Task.Run(async () =>
+        {
+            while (_pageServer.IsListening)
+            {
+                try
+                {
+                    var ctx = await _pageServer.GetContextAsync();
+                    var bytes = await File.ReadAllBytesAsync(
+                        Path.Combine(AppContext.BaseDirectory, "TestPages", "PaymentPage.html"));
+                    ctx.Response.ContentType = "text/html";
+                    ctx.Response.ContentLength64 = bytes.Length;
+                    await ctx.Response.OutputStream.WriteAsync(bytes);
+                    ctx.Response.OutputStream.Close();
+                }
+                catch (HttpListenerException) { break; }
+                catch (ObjectDisposedException) { break; }
+            }
+        });
     }
 
     [Given(@"I navigate to the payment web page")]
     public async Task GivenINavigateToThePaymentWebPage()
     {
-        await _page.GotoAsync("https://ovvwzkzry9.csb.app/");
-        await _page.GetByRole(AriaRole.Link, new() { Name = "Yes, proceed to preview" }).ClickAsync();
+        // Navigate to the locally-served page
+        await _page.GotoAsync("http://localhost:5050/");
     }
 
     [Then(@"I fill-in my valid credentials")]
@@ -73,29 +112,21 @@ public class CreditCardSteps : PageTest
     [When(@"I click the pay button")]
     public async Task WhenIClickThePayButton()
     {
+        // clicking PAY triggers the page's fetch() to WireMock
         await _page.GetByRole(AriaRole.Button, new() { Name = "PAY" }).ClickAsync();
-        var jsonContent = new StringContent(
-            System.Text.Json.JsonSerializer.Serialize(requestBody),
-            Encoding.UTF8,
-            "application/json"
-        );
-
-        _response = await _client.PostAsync("http://localhost:3030/payment", jsonContent);
     }
 
     [Then(@"I get a successful payment message")]
     public async Task ThenIGetASuccessfulPaymentMessage()
     {
-        // Verify the HTTP response is not null
-        Assert.That(_response, Is.Not.Null, "Response should not be null");
+        // Verify the page shows the success message populated by the fetch response
+        await Expect(_page.Locator("#payment-result"))
+            .ToHaveTextAsync("Successful transaction");
 
-        // Verify the HTTP response status code
-        Assert.That((int)_response.StatusCode, Is.EqualTo(201), "Expected status code 201");
-
-        // Verify the response content
-        var content = await _response.Content.ReadAsStringAsync();
-        Assert.That(content, Is.EqualTo("Successful transaction"),
-            "Expected response content to be 'Successful transaction'");
+        // Optionally verify WireMock received the POST from the browser
+        var logs = _server.FindLogEntries(
+            Request.Create().WithPath("/payment").UsingPost());
+        Assert.That(logs, Has.Exactly(1).Items);
     }
 
     [AfterScenario]
@@ -104,6 +135,14 @@ public class CreditCardSteps : PageTest
         await _page.CloseAsync();
         await _browser.CloseAsync();
         _playwright.Dispose();
+
+        try
+        {
+            _pageServer?.Stop();
+            _pageServer?.Close();
+        }
+        catch { }
+
         _server.Dispose();
     }
 }
